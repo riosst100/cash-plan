@@ -42,7 +42,28 @@ function estimateMinPayment(debt) {
   return Math.max(interest + principalFloor, debt.outstanding * 0.1, 50000);
 }
 
-export function analyzeDebts({ debts, expenses, incomes }) {
+const MONTH_NAMES_ID = [
+  "Jan", "Feb", "Mar", "Apr", "Mei", "Jun", "Jul", "Agu", "Sep", "Okt", "Nov", "Des",
+];
+
+function shortLabel(date) {
+  return `${date.getDate()} ${MONTH_NAMES_ID[date.getMonth()]}`;
+}
+
+// Tanggal mulai siklus bulanan ke-n, mengikuti tanggal gajian (payday) sebagai titik awal
+// setiap periode, bukan tanggal 1 kalender.
+function cycleStartDate(today, payday, cycleIndex) {
+  const daysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const thisMonthPayday = new Date(today.getFullYear(), today.getMonth(), Math.min(payday, daysInMonth(today.getFullYear(), today.getMonth())));
+  const baseMonthOffset = today.getDate() >= thisMonthPayday.getDate() ? 0 : -1;
+  const targetMonth = today.getMonth() + baseMonthOffset + cycleIndex;
+  const targetYear = today.getFullYear();
+  const d = new Date(targetYear, targetMonth, 1);
+  const day = Math.min(payday, daysInMonth(d.getFullYear(), d.getMonth()));
+  return new Date(d.getFullYear(), d.getMonth(), day);
+}
+
+export function analyzeDebts({ debts, expenses, incomes, platforms = [], payday = 1 }) {
   const today = new Date();
 
   const totalIncome = incomes.reduce((s, i) => s + i.amount, 0);
@@ -175,8 +196,13 @@ export function analyzeDebts({ debts, expenses, incomes }) {
     }
 
     totalInterestProjected += monthInterest;
+    const cycleStart = cycleStartDate(today, payday, month - 1);
+    const cycleEnd = cycleStartDate(today, payday, month);
+    const cycleEndDisplay = new Date(cycleEnd);
+    cycleEndDisplay.setDate(cycleEndDisplay.getDate() - 1);
     monthlyProjection.push({
       month,
+      periodLabel: `${shortLabel(cycleStart)} - ${shortLabel(cycleEndDisplay)}`,
       totalBalance: Math.round(sim.reduce((s, d) => s + Math.max(d.balance, 0), 0)),
       interestPaid: Math.round(monthInterest),
       principalPaid: Math.round(monthPrincipal),
@@ -232,6 +258,103 @@ export function analyzeDebts({ debts, expenses, incomes }) {
     "Sisihkan dana darurat kecil (meski Rp50.000-100.000/bulan) di luar rencana pelunasan agar tidak terpaksa pinjam lagi saat ada kebutuhan mendadak."
   );
 
+  // ---------- STRATEGI DARURAT BULAN INI ----------
+  // Kalau gaji + dana yang ada TIDAK CUKUP untuk membayar semua cicilan minimum bulan ini,
+  // hitung mana yang WAJIB dibayar (prioritas tertinggi) dan mana yang harus ditunda/direstruktur,
+  // plus opsi darurat gali-lubang-tutup-lubang terkendali kalau ada sisa limit platform lain.
+  let emergencyPlan = null;
+  const availableForDebts = totalIncome - totalExpense;
+  if (availableForDebts < totalMinPayments) {
+    const payable = [];
+    const deferred = [];
+    let remaining = Math.max(availableForDebts, 0);
+
+    for (const d of scored) {
+      const need = estimateMinPayment(d);
+      if (remaining >= need) {
+        payable.push({ platform: d.platform, id: d.id, amount: Math.round(need), due_date: d.due_date });
+        remaining -= need;
+      } else {
+        deferred.push({
+          platform: d.platform,
+          id: d.id,
+          amount: Math.round(need),
+          due_date: d.due_date,
+          rate_monthly_pct: Math.round(d.rate_monthly_pct * 100) / 100,
+        });
+      }
+    }
+
+    const totalShortfall = deferred.reduce((s, d) => s + d.amount, 0);
+
+    // Cari platform dengan sisa limit yang masih bisa dipakai untuk menutup kekurangan darurat,
+    // diurutkan dari bunga TERENDAH dulu (paling tidak merugikan) di antara opsi yang tersedia.
+    // Sumbernya SEMUA platform terdaftar (bukan cuma yang sudah punya hutang aktif), supaya
+    // platform dengan limit menganggur (mis. belum pernah dipakai) tetap terhitung sebagai opsi.
+    const rescueSource = platforms.length > 0 ? platforms : debts;
+    const rescueByPlatform = new Map();
+    for (const p of rescueSource) {
+      if ((p.remaining_limit || 0) <= 0) continue;
+      const platformName = p.platform ?? p.name;
+      if (!rescueByPlatform.has(platformName)) {
+        rescueByPlatform.set(platformName, {
+          platform: platformName,
+          remaining_limit: p.remaining_limit,
+          rate_monthly_pct: Math.round(monthlyRate(p) * 10000) / 100,
+        });
+      }
+    }
+    const rescueCandidates = [...rescueByPlatform.values()].sort((a, b) => a.rate_monthly_pct - b.rate_monthly_pct);
+
+    const rescueMessages = [];
+    let stillShort = totalShortfall;
+    const rescuePlan = [];
+    for (const c of rescueCandidates) {
+      if (stillShort <= 0) break;
+      const use = Math.min(c.remaining_limit, stillShort);
+      if (use <= 0) continue;
+      rescuePlan.push({ platform: c.platform, amount: Math.round(use), rate_monthly_pct: c.rate_monthly_pct });
+      stillShort -= use;
+    }
+
+    if (deferred.length > 0) {
+      rescueMessages.push(
+        `Gaji bulan ini hanya cukup membayar ${payable.length} dari ${scored.length} cicilan (kekurangan sekitar Rp${Math.round(
+          totalShortfall
+        ).toLocaleString("id-ID")}). Cicilan yang WAJIB dibayar dulu (prioritas tertinggi/jatuh tempo terdekat) sudah diurutkan di tabel Prioritas Pelunasan di atas.`
+      );
+      if (rescuePlan.length > 0 && stillShort <= 0) {
+        rescueMessages.push(
+          `DARURAT TERKENDALI: sisa limit di ${rescuePlan
+            .map((r) => `${r.platform} (Rp${r.amount.toLocaleString("id-ID")}, bunga ${r.rate_monthly_pct}%/bln)`)
+            .join(", ")} bisa dipakai HANYA untuk menutup cicilan yang tertunda ini — TIDAK untuk kebutuhan lain. Ini menambah hutang baru, jadi hanya lakukan jika benar-benar tidak ada cara lain, dan segera lunasi begitu ada dana dari gaji berikutnya.`
+        );
+      } else if (rescuePlan.length > 0) {
+        rescueMessages.push(
+          `Sisa limit yang tersedia (${rescuePlan
+            .map((r) => r.platform)
+            .join(", ")}) TIDAK CUKUP menutup seluruh kekurangan — masih kurang sekitar Rp${Math.round(
+            stillShort
+          ).toLocaleString("id-ID")}. Segera hubungi platform yang cicilannya tertunda untuk restrukturisasi/perpanjangan tenor sebelum jatuh tempo, agar tidak kena denda atau masuk daftar hitam (SLIK/blacklist).`
+        );
+      } else {
+        rescueMessages.push(
+          "Tidak ada sisa limit platform yang bisa dipakai untuk menutup kekurangan. Segera hubungi platform yang cicilannya tertunda untuk restrukturisasi/perpanjangan tenor sebelum jatuh tempo, dan pertimbangkan bantuan dari keluarga/pihak lain sebagai jalan terakhir sebelum gagal bayar."
+        );
+      }
+    }
+
+    emergencyPlan = {
+      totalAvailable: Math.round(Math.max(availableForDebts, 0)),
+      totalNeeded: Math.round(totalMinPayments),
+      shortfall: Math.round(totalShortfall),
+      payable,
+      deferred,
+      rescuePlan,
+      messages: rescueMessages,
+    };
+  }
+
   return {
     summary: {
       totalIncome,
@@ -250,5 +373,6 @@ export function analyzeDebts({ debts, expenses, incomes }) {
     totalInterestProjected: Math.round(totalInterestProjected),
     canBorrowMoreSafely,
     maxSafeNewLoanInstallment: Math.round(maxSafeNewLoanInstallment),
+    emergencyPlan,
   };
 }

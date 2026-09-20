@@ -40,4 +40,7 @@ export const api = {
 
   analyze: () => request("/analyze", { method: "POST" }),
   getSummary: () => request("/summary"),
+
+  getSetting: (key) => request(`/settings/${key}`),
+  setSetting: (key, value) => request(`/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
 };

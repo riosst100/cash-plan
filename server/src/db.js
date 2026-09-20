@@ -81,6 +81,11 @@ CREATE TABLE IF NOT EXISTS incomes (
   income_date TEXT NOT NULL,
   created_at TEXT NOT NULL DEFAULT (datetime('now'))
 );
+
+CREATE TABLE IF NOT EXISTS settings (
+  key TEXT PRIMARY KEY,
+  value TEXT
+);
 `);
 
 // Migrasi ringan: tambah kolom baru ke tabel yang sudah ada tanpa menghapus data lama.

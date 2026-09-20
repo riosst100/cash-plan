@@ -8,6 +8,21 @@ const app = express();
 app.use(cors());
 app.use(express.json());
 
+// ---------- SETTINGS ----------
+app.get("/api/settings/:key", (req, res) => {
+  const row = db.prepare("SELECT * FROM settings WHERE key = ?").get(req.params.key);
+  res.json({ key: req.params.key, value: row ? row.value : null });
+});
+
+app.put("/api/settings/:key", (req, res) => {
+  const { value } = req.body;
+  db.prepare(
+    `INSERT INTO settings (key, value) VALUES (?, ?)
+     ON CONFLICT(key) DO UPDATE SET value = excluded.value`
+  ).run(req.params.key, String(value));
+  res.json({ key: req.params.key, value: String(value) });
+});
+
 // ---------- SHARED DATE HELPERS ----------
 function formatDateLocal(year, month, day) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -180,12 +195,27 @@ app.patch("/api/debts/:debtId/installments/:installmentId", (req, res) => {
 });
 
 // ---------- DEBTS ----------
+function attachInstallmentSummary(rows) {
+  const summaryStmt = db.prepare(
+    `SELECT COUNT(*) as total, SUM(CASE WHEN status = 'unpaid' THEN 1 ELSE 0 END) as unpaid
+     FROM debt_installments WHERE debt_id = ?`
+  );
+  return rows.map((row) => {
+    const summary = summaryStmt.get(row.id);
+    return {
+      ...row,
+      total_installments: summary.total || 0,
+      unpaid_installments: summary.unpaid || 0,
+    };
+  });
+}
+
 app.get("/api/debts", (req, res) => {
   const rows =
     req.query.status === "all"
       ? db.prepare("SELECT * FROM debts ORDER BY due_date ASC").all()
       : db.prepare("SELECT * FROM debts WHERE status = 'active' ORDER BY due_date ASC").all();
-  res.json(rows);
+  res.json(attachInstallmentSummary(rows));
 });
 
 app.patch("/api/debts/:id/status", (req, res) => {
@@ -471,25 +501,98 @@ function toMonthlyExpense(rule) {
   return rule; // monthly: amount sudah per bulan
 }
 
+// Untuk hutang bertenor, sesuaikan due_date ke cicilan berikutnya yang belum dibayar
+// dan outstanding ke sisa tagihan (cicilan tersisa x jumlah cicilan), supaya Analisa
+// tidak salah menampilkan cicilan yang sudah lunas sebagai "terlambat".
+function adjustForRemainingInstallments(debt) {
+  if (!(debt.tenor_months > 1)) return debt;
+  const nextUnpaid = db
+    .prepare("SELECT * FROM debt_installments WHERE debt_id = ? AND status = 'unpaid' ORDER BY due_date ASC LIMIT 1")
+    .get(debt.id);
+  if (!nextUnpaid) return debt; // semua cicilan lunas (seharusnya sudah status 'paid')
+
+  const unpaidCount = db
+    .prepare("SELECT COUNT(*) as c FROM debt_installments WHERE debt_id = ? AND status = 'unpaid'")
+    .get(debt.id).c;
+
+  return {
+    ...debt,
+    due_date: nextUnpaid.due_date,
+    outstanding: unpaidCount * nextUnpaid.amount,
+  };
+}
+
 app.post("/api/analyze", (req, res) => {
-  const platformByName = new Map(db.prepare("SELECT * FROM platforms").all().map((p) => [p.name, p]));
+  const allPlatforms = db.prepare("SELECT * FROM platforms").all();
+  const platformByName = new Map(allPlatforms.map((p) => [p.name, p]));
   const debts = db.prepare("SELECT * FROM debts WHERE status = 'active'").all().map((d) => {
     const platform = platformByName.get(d.platform);
-    return platform
+    const withRate = platform
       ? { ...d, interest_rate: resolveInterestRate(platform, d.tenor_months), interest_period: platform.interest_period }
       : d;
+    return adjustForRemainingInstallments(withRate);
   });
   const expenseRules = db.prepare("SELECT * FROM expense_rules").all().map(toMonthlyExpense);
   const incomeRules = db.prepare("SELECT * FROM income_rules").all();
-  const result = analyzeDebts({ debts, expenses: expenseRules, incomes: incomeRules });
+  const primaryIncomeRule = db.prepare("SELECT * FROM income_rules ORDER BY income_day ASC LIMIT 1").get();
+  const payday = primaryIncomeRule?.income_day ?? 1;
+  const result = analyzeDebts({ debts, expenses: expenseRules, incomes: incomeRules, platforms: allPlatforms, payday });
   res.json(result);
 });
 
 // ---------- SUMMARY / TIMELINE ----------
 // Gabungkan cicilan hutang (belum lunas) + pemasukan (histori gaji) per tanggal,
 // dari hari ini sampai tanggal jatuh tempo hutang paling akhir.
+const MONTH_NAMES_ID = [
+  "Januari", "Februari", "Maret", "April", "Mei", "Juni",
+  "Juli", "Agustus", "September", "Oktober", "November", "Desember",
+];
+
+function shortDateId(dateStr) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  return `${d} ${MONTH_NAMES_ID[m - 1].slice(0, 3)}`;
+}
+
+// Tentukan label & tanggal awal "periode gajian" (dari tanggal gajian sampai sehari sebelum
+// gajian berikutnya) yang memuat tanggal tertentu, berdasarkan tanggal gajian (payday, 1-31).
+function getPayPeriod(dateStr, payday) {
+  const [y, m, d] = dateStr.split("-").map(Number);
+  const date = new Date(y, m - 1, d);
+
+  // Cari tanggal gajian pada bulan yang sama, disesuaikan kalau bulan itu lebih pendek dari payday.
+  const daysInMonth = (year, month) => new Date(year, month + 1, 0).getDate();
+  const paydayThisMonth = new Date(date.getFullYear(), date.getMonth(), Math.min(payday, daysInMonth(date.getFullYear(), date.getMonth())));
+
+  let periodStart;
+  if (date.getDate() >= paydayThisMonth.getDate()) {
+    periodStart = paydayThisMonth;
+  } else {
+    const prevMonth = new Date(date.getFullYear(), date.getMonth() - 1, 1);
+    const paydayPrevMonth = new Date(prevMonth.getFullYear(), prevMonth.getMonth(), Math.min(payday, daysInMonth(prevMonth.getFullYear(), prevMonth.getMonth())));
+    periodStart = paydayPrevMonth;
+  }
+
+  const periodEndExclusive = new Date(periodStart.getFullYear(), periodStart.getMonth() + 1, periodStart.getDate());
+  const periodEnd = new Date(periodEndExclusive);
+  periodEnd.setDate(periodEnd.getDate() - 1);
+
+  const startStr = formatDateLocal(periodStart.getFullYear(), periodStart.getMonth(), periodStart.getDate());
+  const endStr = formatDateLocal(periodEnd.getFullYear(), periodEnd.getMonth(), periodEnd.getDate());
+
+  return {
+    key: startStr,
+    label: `${shortDateId(startStr)} - ${shortDateId(endStr)} ${periodEnd.getFullYear()}`,
+  };
+}
+
 app.get("/api/summary", (req, res) => {
   const today = formatDateLocal(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+
+  const balanceSetting = db.prepare("SELECT * FROM settings WHERE key = 'atm_balance'").get();
+  const startingBalance = balanceSetting ? Number(balanceSetting.value) || 0 : 0;
+
+  const primaryIncomeRule = db.prepare("SELECT * FROM income_rules ORDER BY income_day ASC LIMIT 1").get();
+  const payday = primaryIncomeRule?.income_day ?? 1;
 
   const activeDebts = db.prepare("SELECT * FROM debts WHERE status = 'active'").all();
   const events = [];
@@ -547,7 +650,22 @@ app.get("/api/summary", (req, res) => {
   }
 
   const timeline = Object.values(grouped).sort((a, b) => (a.date < b.date ? -1 : 1));
-  res.json(timeline);
+
+  // Kelompokkan hari-hari di timeline ke dalam periode gajian (mis. "28 Sep - 27 Okt 2026").
+  const periodsMap = new Map();
+  for (const day of timeline) {
+    const period = getPayPeriod(day.date, payday);
+    if (!periodsMap.has(period.key)) {
+      periodsMap.set(period.key, { key: period.key, label: period.label, income: 0, expense: 0, days: [] });
+    }
+    const p = periodsMap.get(period.key);
+    p.income += day.income;
+    p.expense += day.expense;
+    p.days.push(day);
+  }
+  const periods = [...periodsMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+
+  res.json({ startingBalance, payday, periods });
 });
 
 const PORT = process.env.PORT || 4000;

@@ -74,7 +74,7 @@ export function PlatformList({ platforms, onDelete, onEdit }) {
 export function DebtList({ debts, platforms, onDelete, onEdit, onMarkPaid, onMarkActive, onInstallmentChanged }) {
   const [expandedId, setExpandedId] = useState(null);
   if (debts.length === 0) return <p className="empty">Belum ada data hutang.</p>;
-  const colSpan = 11;
+  const colSpan = 12;
   return (
     <div className="table-wrap">
       <table>
@@ -87,6 +87,7 @@ export function DebtList({ debts, platforms, onDelete, onEdit, onMarkPaid, onMar
             <th>Total Tagihan</th>
             <th>Bunga</th>
             <th>Tenor</th>
+            <th>Sisa Cicilan</th>
             <th>Cicilan/bln</th>
             <th>Tgl Pengajuan</th>
             <th>Jatuh Tempo</th>
@@ -116,6 +117,9 @@ export function DebtList({ debts, platforms, onDelete, onEdit, onMarkPaid, onMar
                     {interestRate}% / {PERIOD_LABEL[interestPeriod] ?? interestPeriod}
                   </td>
                   <td>{d.tenor_months ? `${d.tenor_months} bln` : "-"}</td>
+                  <td>
+                    {hasSchedule ? `${d.unpaid_installments} bulan` : "-"}
+                  </td>
                   <td>{d.min_payment ? fmt(d.min_payment) : "-"}</td>
                   <td>{formatDate(d.transaction_date)}</td>
                   <td>{formatDayOnly(d.due_date)}</td>

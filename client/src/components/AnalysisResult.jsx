@@ -4,7 +4,7 @@ import { formatDate } from "../dateFormat.js";
 
 export default function AnalysisResult({ result }) {
   if (!result) return null;
-  const { summary, warnings, recommendations, priorityOrder, strategy, monthlyProjection, payoffEstimateMonths, totalInterestProjected, canBorrowMoreSafely, maxSafeNewLoanInstallment } = result;
+  const { summary, warnings, recommendations, priorityOrder, strategy, monthlyProjection, payoffEstimateMonths, totalInterestProjected, canBorrowMoreSafely, maxSafeNewLoanInstallment, emergencyPlan } = result;
 
   return (
     <div className="analysis">
@@ -35,6 +35,54 @@ export default function AnalysisResult({ result }) {
               <li key={i}>{w}</li>
             ))}
           </ul>
+        </div>
+      )}
+
+      {emergencyPlan && (
+        <div className="alert-box warn">
+          <h4>🚨 Strategi Darurat Bulan Ini</h4>
+          <p className="muted">
+            Dana tersedia dari gaji: {fmt(emergencyPlan.totalAvailable)} · Kebutuhan cicilan bulan ini: {fmt(emergencyPlan.totalNeeded)}
+            {" "}· Kekurangan: <strong>{fmt(emergencyPlan.shortfall)}</strong>
+          </p>
+          <ul>
+            {emergencyPlan.messages.map((m, i) => (
+              <li key={i}>{m}</li>
+            ))}
+          </ul>
+
+          {emergencyPlan.payable.length > 0 && (
+            <>
+              <p className="muted" style={{ marginTop: 12 }}><strong>✅ Bisa dibayar bulan ini ({emergencyPlan.payable.length}):</strong></p>
+              <ul>
+                {emergencyPlan.payable.map((p) => (
+                  <li key={p.id}>{p.platform} — {fmt(p.amount)} (jatuh tempo {formatDate(p.due_date)})</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {emergencyPlan.deferred.length > 0 && (
+            <>
+              <p className="muted" style={{ marginTop: 12 }}><strong>⏸ Harus ditunda/direstruktur ({emergencyPlan.deferred.length}):</strong></p>
+              <ul>
+                {emergencyPlan.deferred.map((p) => (
+                  <li key={p.id}>{p.platform} — {fmt(p.amount)} (jatuh tempo {formatDate(p.due_date)}, bunga {p.rate_monthly_pct}%/bln)</li>
+                ))}
+              </ul>
+            </>
+          )}
+
+          {emergencyPlan.rescuePlan.length > 0 && (
+            <>
+              <p className="muted" style={{ marginTop: 12 }}><strong>⚠️ Opsi darurat pakai sisa limit (hanya jika terpaksa):</strong></p>
+              <ul>
+                {emergencyPlan.rescuePlan.map((r, i) => (
+                  <li key={i}>{r.platform} — pakai {fmt(r.amount)} dari sisa limit (bunga {r.rate_monthly_pct}%/bln)</li>
+                ))}
+              </ul>
+            </>
+          )}
         </div>
       )}
 
@@ -100,13 +148,13 @@ export default function AnalysisResult({ result }) {
 
       {monthlyProjection.length > 0 && (
         <div className="card">
-          <h4>Proyeksi Sisa Total Hutang per Bulan</h4>
+          <h4>Proyeksi Sisa Total Hutang per Periode Gajian</h4>
           <ResponsiveContainer width="100%" height={320}>
             <LineChart data={monthlyProjection}>
               <CartesianGrid strokeDasharray="3 3" />
-              <XAxis dataKey="month" label={{ value: "Bulan ke-", position: "insideBottom", offset: -5 }} />
+              <XAxis dataKey="periodLabel" angle={-30} textAnchor="end" height={60} />
               <YAxis tickFormatter={(v) => fmt(v)} />
-              <Tooltip formatter={(v) => fmt(v)} labelFormatter={(l) => `Bulan ke-${l}`} />
+              <Tooltip formatter={(v) => fmt(v)} labelFormatter={(l) => `Periode ${l}`} />
               <Legend />
               <Line type="monotone" dataKey="totalBalance" name="Sisa Hutang" stroke="#e0245e" strokeWidth={2} dot={false} />
             </LineChart>

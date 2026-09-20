@@ -291,6 +291,28 @@ th { color: var(--muted); font-weight: 600; font-size: 12px; text-transform: upp
 .text-bad { color: var(--bad); }
 .muted { color: var(--muted); font-size: 13px; }
 
+.summary-period {
+  margin-top: 20px;
+  border: 1px solid var(--border);
+  border-radius: 10px;
+  overflow: hidden;
+}
+
+.summary-period-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 10px 16px;
+  background: var(--bg);
+  font-weight: 600;
+  font-size: 14px;
+  border-bottom: 1px solid var(--border);
+}
+
+.summary-period .table-wrap { padding: 0 4px; }
+
 @media (max-width: 700px) {
   .form-grid { grid-template-columns: 1fr; }
   .grid-2 { grid-template-columns: 1fr; }
