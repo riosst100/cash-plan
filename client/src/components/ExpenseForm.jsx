@@ -1,14 +1,30 @@
-import { useState } from "react";
+import { useState, useEffect } from "react";
 import CurrencyInput from "./CurrencyInput.jsx";
 
-const empty = { category: "", description: "", amount: "", recurrence: "monthly", expense_date: "", expense_day: "" };
+const empty = { category: "", description: "", amount: "", recurrence: "monthly", expense_date: "", expense_day: "", balance_account_id: "" };
 
-const CATEGORIES = ["Makan", "Transport", "Penitipan Motor", "Tagihan Rumah", "Hiburan", "Belanja", "Langganan", "Kesehatan", "Lainnya"];
+const CATEGORIES = ["Makan", "Transport", "Penitipan Motor", "Ojek Online", "Tagihan Rumah", "Hiburan", "Belanja", "Langganan", "Kesehatan", "Lainnya"];
 const DAYS = Array.from({ length: 31 }, (_, i) => i + 1);
 
-export default function ExpenseForm({ onSubmit }) {
+export default function ExpenseForm({ onSubmit, balances = [], editing, onCancelEdit }) {
   const [form, setForm] = useState(empty);
   const [submitting, setSubmitting] = useState(false);
+
+  useEffect(() => {
+    if (editing) {
+      setForm({
+        category: editing.category ?? "",
+        description: editing.description ?? "",
+        amount: editing.amount ?? "",
+        recurrence: editing.recurrence ?? "monthly",
+        expense_date: editing.expense_date ?? "",
+        expense_day: editing.expense_day ?? "",
+        balance_account_id: editing.balance_account_id ?? "",
+      });
+    } else {
+      setForm(empty);
+    }
+  }, [editing?.id]);
 
   function update(field, value) {
     setForm((f) => ({ ...f, [field]: value }));
@@ -26,6 +42,7 @@ export default function ExpenseForm({ onSubmit }) {
         amount: Number(form.amount),
         expense_day: form.recurrence === "monthly" ? Number(form.expense_day) : null,
         expense_date: form.recurrence === "once" ? form.expense_date : null,
+        balance_account_id: form.balance_account_id || null,
       });
       setForm(empty);
     } finally {
@@ -35,7 +52,7 @@ export default function ExpenseForm({ onSubmit }) {
 
   return (
     <form className="card form-grid" onSubmit={handleSubmit}>
-      <h3>Tambah Pengeluaran</h3>
+      <h3>{editing ? `Edit Pengeluaran — ${editing.category}` : "Tambah Pengeluaran"}</h3>
 
       <label>
         Kategori
@@ -86,14 +103,33 @@ export default function ExpenseForm({ onSubmit }) {
         </label>
       )}
 
+      {balances.length > 0 && (
+        <label>
+          Sumber Saldo — opsional
+          <select value={form.balance_account_id} onChange={(e) => update("balance_account_id", e.target.value)}>
+            <option value="">Tidak ditentukan</option>
+            {balances.map((b) => (
+              <option key={b.id} value={b.id}>{b.name}</option>
+            ))}
+          </select>
+        </label>
+      )}
+
       <label className="full">
         Deskripsi — opsional
         <input type="text" value={form.description} onChange={(e) => update("description", e.target.value)} />
       </label>
 
-      <button type="submit" disabled={submitting} className="full btn-secondary">
-        {submitting ? "Menyimpan..." : "Tambah Pengeluaran"}
-      </button>
+      <div className="full row-actions">
+        <button type="submit" disabled={submitting} className="btn-secondary">
+          {submitting ? "Menyimpan..." : editing ? "Simpan Perubahan" : "Tambah Pengeluaran"}
+        </button>
+        {editing && (
+          <button type="button" className="btn-secondary-sm" onClick={onCancelEdit}>
+            Batal
+          </button>
+        )}
+      </div>
     </form>
   );
 }

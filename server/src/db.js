@@ -86,6 +86,13 @@ CREATE TABLE IF NOT EXISTS settings (
   key TEXT PRIMARY KEY,
   value TEXT
 );
+
+CREATE TABLE IF NOT EXISTS balance_accounts (
+  id TEXT PRIMARY KEY,
+  name TEXT NOT NULL,
+  balance REAL NOT NULL DEFAULT 0,
+  created_at TEXT NOT NULL DEFAULT (datetime('now'))
+);
 `);
 
 // Migrasi ringan: tambah kolom baru ke tabel yang sudah ada tanpa menghapus data lama.
@@ -105,6 +112,10 @@ ensureColumn("debts", "tenor_months", "INTEGER");
 ensureColumn("debts", "status", "TEXT NOT NULL DEFAULT 'active'"); // 'active' atau 'paid'
 ensureColumn("debts", "transaction_date", "TEXT"); // tanggal pengajuan hutang
 ensureColumn("debts", "principal", "REAL"); // plafon asli (pokok pinjaman), disimpan langsung dari input user
+ensureColumn("expense_rules", "balance_account_id", "TEXT"); // sumber saldo (mis. Cash, E-wallet), opsional
+ensureColumn("expenses", "balance_account_id", "TEXT");
+ensureColumn("income_rules", "balance_account_id", "TEXT"); // tujuan saldo (mis. ATM), opsional
+ensureColumn("incomes", "balance_account_id", "TEXT");
 
 // Migrasi: hapus kolom yang sudah tidak dipakai lagi.
 function dropColumnIfExists(table, column) {
@@ -135,6 +146,29 @@ function backfillPrincipal() {
 }
 
 backfillPrincipal();
+
+// Backfill: pindahkan saldo ATM lama (setting tunggal) jadi satu akun saldo awal,
+// supaya nilai yang sudah diisi user sebelumnya tidak hilang.
+function backfillBalanceAccount() {
+  const oldSetting = raw.prepare("SELECT * FROM settings WHERE key = 'atm_balance'").get();
+  if (!oldSetting) return;
+  const value = Number(oldSetting.value) || 0;
+  if (value === 0) {
+    raw.prepare("DELETE FROM settings WHERE key = 'atm_balance'").run();
+    return;
+  }
+  const hasAccounts = raw.prepare("SELECT COUNT(*) as c FROM balance_accounts").get().c > 0;
+  if (!hasAccounts) {
+    raw.prepare("INSERT INTO balance_accounts (id, name, balance) VALUES (?, ?, ?)").run(
+      "acc-" + Date.now(),
+      "ATM",
+      value
+    );
+  }
+  raw.prepare("DELETE FROM settings WHERE key = 'atm_balance'").run();
+}
+
+backfillBalanceAccount();
 
 // Backfill: generate baris cicilan untuk hutang lama (bertenor) yang belum punya installments.
 function formatDateLocalDb(year, month, day) {

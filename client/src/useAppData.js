@@ -7,21 +7,24 @@ export function useAppData() {
   const [debts, setDebts] = useState([]);
   const [expenses, setExpenses] = useState([]);
   const [incomes, setIncomes] = useState([]);
+  const [balances, setBalances] = useState([]);
   const [error, setError] = useState("");
   const [showPaidDebts, setShowPaidDebts] = useState(false);
 
   const loadAll = useCallback(async () => {
     try {
-      const [p, d, e, i] = await Promise.all([
+      const [p, d, e, i, b] = await Promise.all([
         api.getPlatforms(),
         api.getDebts(showPaidDebts),
         api.getExpenses(),
         api.getIncomes(),
+        api.getBalances(),
       ]);
       setPlatforms(p);
       setDebts(d);
       setExpenses(e);
       setIncomes(i);
+      setBalances(b);
     } catch (err) {
       setError(err.message);
     }
@@ -36,6 +39,7 @@ export function useAppData() {
     debts,
     expenses,
     incomes,
+    balances,
     error,
     setError,
     showPaidDebts,

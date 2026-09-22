@@ -2,10 +2,12 @@ import { useState } from "react";
 import { api } from "../api.js";
 import DebtForm from "../components/DebtForm.jsx";
 import { DebtList } from "../components/DataLists.jsx";
+import { useConfirm } from "../useConfirm.jsx";
 
 export default function LoanPage({ platforms, debts, showPaidDebts, setShowPaidDebts, loadAll, setError }) {
   const [editingDebt, setEditingDebt] = useState(null);
   const [showFormModal, setShowFormModal] = useState(false);
+  const { confirm, dialog } = useConfirm();
 
   function openAddModal() {
     setEditingDebt(null);
@@ -38,6 +40,13 @@ export default function LoanPage({ platforms, debts, showPaidDebts, setShowPaidD
         onEdit={openEditModal}
         onInstallmentChanged={loadAll}
         onMarkPaid={async (id) => {
+          const debt = debts.find((d) => d.id === id);
+          const ok = await confirm({
+            title: "Tandai hutang lunas?",
+            message: `Hutang ${debt?.platform ?? ""} akan ditandai sudah lunas dan disembunyikan dari daftar aktif.`,
+            confirmLabel: "Ya, Tandai Lunas",
+          });
+          if (!ok) return;
           await api.updateDebtStatus(id, "paid");
           await loadAll();
         }}
@@ -46,6 +55,14 @@ export default function LoanPage({ platforms, debts, showPaidDebts, setShowPaidD
           await loadAll();
         }}
         onDelete={async (id) => {
+          const debt = debts.find((d) => d.id === id);
+          const ok = await confirm({
+            title: "Hapus hutang ini?",
+            message: `Hutang ${debt?.platform ?? ""} beserta seluruh riwayat cicilannya akan dihapus permanen. Tindakan ini tidak bisa dibatalkan.`,
+            confirmLabel: "Ya, Hapus",
+            danger: true,
+          });
+          if (!ok) return;
           await api.deleteDebt(id);
           await loadAll();
         }}
@@ -80,6 +97,7 @@ export default function LoanPage({ platforms, debts, showPaidDebts, setShowPaidD
           </div>
         </div>
       )}
+      {dialog}
     </section>
   );
 }

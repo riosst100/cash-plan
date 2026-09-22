@@ -23,6 +23,32 @@ app.put("/api/settings/:key", (req, res) => {
   res.json({ key: req.params.key, value: String(value) });
 });
 
+// ---------- BALANCE ACCOUNTS (Saldo) ----------
+app.get("/api/balances", (req, res) => {
+  res.json(db.prepare("SELECT * FROM balance_accounts ORDER BY created_at ASC").all());
+});
+
+app.post("/api/balances", (req, res) => {
+  const { name, balance } = req.body;
+  if (!name) return res.status(400).json({ error: "name wajib diisi" });
+  const id = nanoid();
+  db.prepare("INSERT INTO balance_accounts (id, name, balance) VALUES (?, ?, ?)").run(id, name, balance ?? 0);
+  res.status(201).json(db.prepare("SELECT * FROM balance_accounts WHERE id = ?").get(id));
+});
+
+app.put("/api/balances/:id", (req, res) => {
+  const existing = db.prepare("SELECT * FROM balance_accounts WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  const merged = { ...existing, ...req.body };
+  db.prepare("UPDATE balance_accounts SET name=?, balance=? WHERE id=?").run(merged.name, merged.balance, req.params.id);
+  res.json(db.prepare("SELECT * FROM balance_accounts WHERE id = ?").get(req.params.id));
+});
+
+app.delete("/api/balances/:id", (req, res) => {
+  db.prepare("DELETE FROM balance_accounts WHERE id = ?").run(req.params.id);
+  res.status(204).end();
+});
+
 // ---------- SHARED DATE HELPERS ----------
 function formatDateLocal(year, month, day) {
   return `${year}-${String(month + 1).padStart(2, "0")}-${String(day).padStart(2, "0")}`;
@@ -181,12 +207,20 @@ app.get("/api/debts/:id/installments", (req, res) => {
 });
 
 app.patch("/api/debts/:debtId/installments/:installmentId", (req, res) => {
-  const { status } = req.body;
-  if (!["paid", "unpaid"].includes(status)) {
+  const existing = db.prepare("SELECT * FROM debt_installments WHERE id = ? AND debt_id = ?").get(req.params.installmentId, req.params.debtId);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+
+  const { status, amount } = req.body;
+  if (status !== undefined && !["paid", "unpaid"].includes(status)) {
     return res.status(400).json({ error: "status harus 'paid' atau 'unpaid'" });
   }
-  db.prepare("UPDATE debt_installments SET status = ? WHERE id = ? AND debt_id = ?").run(
-    status,
+  if (amount !== undefined && (amount == null || amount <= 0)) {
+    return res.status(400).json({ error: "amount harus lebih dari 0" });
+  }
+
+  db.prepare("UPDATE debt_installments SET status = ?, amount = ? WHERE id = ? AND debt_id = ?").run(
+    status ?? existing.status,
+    amount ?? existing.amount,
     req.params.installmentId,
     req.params.debtId
   );
@@ -337,7 +371,7 @@ function generateExpenseHistory(rule) {
   const rows = [];
 
   if (rule.recurrence === "once") {
-    rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date: rule.expense_date });
+    rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date: rule.expense_date, balance_account_id: rule.balance_account_id });
     return rows;
   }
 
@@ -349,7 +383,7 @@ function generateExpenseHistory(rule) {
       const lastDayOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
       const day = Math.min(rule.expense_day, lastDayOfMonth);
       const expense_date = formatDateLocal(d.getFullYear(), d.getMonth(), day);
-      rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date });
+      rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date, balance_account_id: rule.balance_account_id });
     }
     return rows;
   }
@@ -360,7 +394,7 @@ function generateExpenseHistory(rule) {
     for (let d = new Date(start); d < end; d.setDate(d.getDate() + 1)) {
       if (isWeekend(d)) continue;
       const expense_date = formatDateLocal(d.getFullYear(), d.getMonth(), d.getDate());
-      rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date });
+      rows.push({ id: nanoid(), rule_id: rule.id, category: rule.category, description: rule.description, amount: rule.amount, expense_date, balance_account_id: rule.balance_account_id });
     }
     return rows;
   }
@@ -373,7 +407,7 @@ app.get("/api/expenses", (req, res) => {
 });
 
 app.post("/api/expenses", (req, res) => {
-  const { category, description, amount, recurrence, expense_day, expense_date } = req.body;
+  const { category, description, amount, recurrence, expense_day, expense_date, balance_account_id } = req.body;
   if (!category || amount == null || !recurrence) {
     return res.status(400).json({ error: "category, amount, recurrence wajib diisi" });
   }
@@ -396,20 +430,61 @@ app.post("/api/expenses", (req, res) => {
     recurrence,
     expense_day: recurrence === "monthly" ? expense_day : null,
     expense_date: recurrence === "once" ? expense_date : null,
+    balance_account_id: balance_account_id ?? null,
   };
   db.prepare(
-    `INSERT INTO expense_rules (id, category, description, amount, recurrence, expense_day, expense_date) VALUES (?, ?, ?, ?, ?, ?, ?)`
-  ).run(rule.id, rule.category, rule.description, rule.amount, rule.recurrence, rule.expense_day, rule.expense_date);
+    `INSERT INTO expense_rules (id, category, description, amount, recurrence, expense_day, expense_date, balance_account_id) VALUES (?, ?, ?, ?, ?, ?, ?, ?)`
+  ).run(rule.id, rule.category, rule.description, rule.amount, rule.recurrence, rule.expense_day, rule.expense_date, rule.balance_account_id);
 
   const history = generateExpenseHistory(rule);
   const insertExpense = db.prepare(
-    `INSERT INTO expenses (id, rule_id, category, description, amount, expense_date) VALUES (?, ?, ?, ?, ?, ?)`
+    `INSERT INTO expenses (id, rule_id, category, description, amount, expense_date, balance_account_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
   );
   for (const row of history) {
-    insertExpense.run(row.id, row.rule_id, row.category, row.description, row.amount, row.expense_date);
+    insertExpense.run(row.id, row.rule_id, row.category, row.description, row.amount, row.expense_date, row.balance_account_id);
   }
 
   res.status(201).json(db.prepare("SELECT * FROM expense_rules WHERE id = ?").get(id));
+});
+
+app.put("/api/expenses/:id", (req, res) => {
+  const existing = db.prepare("SELECT * FROM expense_rules WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  const merged = { ...existing, ...req.body };
+
+  if (merged.recurrence === "monthly" && !merged.expense_day) {
+    return res.status(400).json({ error: "expense_day wajib diisi untuk pengeluaran bulanan" });
+  }
+  if (merged.recurrence === "once" && !merged.expense_date) {
+    return res.status(400).json({ error: "expense_date wajib diisi untuk pengeluaran sekali" });
+  }
+
+  const rule = {
+    id: req.params.id,
+    category: merged.category,
+    description: merged.description ?? null,
+    amount: merged.amount,
+    recurrence: merged.recurrence,
+    expense_day: merged.recurrence === "monthly" ? merged.expense_day : null,
+    expense_date: merged.recurrence === "once" ? merged.expense_date : null,
+    balance_account_id: merged.balance_account_id ?? null,
+  };
+
+  db.prepare(
+    `UPDATE expense_rules SET category=?, description=?, amount=?, recurrence=?, expense_day=?, expense_date=?, balance_account_id=? WHERE id=?`
+  ).run(rule.category, rule.description, rule.amount, rule.recurrence, rule.expense_day, rule.expense_date, rule.balance_account_id, rule.id);
+
+  // Regenerasi histori dari rule terbaru (hanya jika tidak ada catatan yang jadi acuan histori lunas dsb — expenses tidak punya status, jadi aman diregenerasi).
+  db.prepare("DELETE FROM expenses WHERE rule_id = ?").run(rule.id);
+  const history = generateExpenseHistory(rule);
+  const insertExpense = db.prepare(
+    `INSERT INTO expenses (id, rule_id, category, description, amount, expense_date, balance_account_id) VALUES (?, ?, ?, ?, ?, ?, ?)`
+  );
+  for (const row of history) {
+    insertExpense.run(row.id, row.rule_id, row.category, row.description, row.amount, row.expense_date, row.balance_account_id);
+  }
+
+  res.json(db.prepare("SELECT * FROM expense_rules WHERE id = ?").get(rule.id));
 });
 
 app.get("/api/expenses/:id/history", (req, res) => {
@@ -438,7 +513,7 @@ function generateIncomeHistory(rule) {
     const lastDayOfMonth = new Date(d.getFullYear(), d.getMonth() + 1, 0).getDate();
     const day = Math.min(rule.income_day, lastDayOfMonth);
     const income_date = formatDateLocal(d.getFullYear(), d.getMonth(), day);
-    rows.push({ id: nanoid(), rule_id: rule.id, source: rule.source, amount: rule.amount, income_date });
+    rows.push({ id: nanoid(), rule_id: rule.id, source: rule.source, amount: rule.amount, income_date, balance_account_id: rule.balance_account_id });
   }
   return rows;
 }
@@ -448,7 +523,7 @@ app.get("/api/incomes", (req, res) => {
 });
 
 app.post("/api/incomes", (req, res) => {
-  const { source, amount, income_day } = req.body;
+  const { source, amount, income_day, balance_account_id } = req.body;
   if (amount == null || !income_day) {
     return res.status(400).json({ error: "amount, income_day (tanggal gajian 1-31) wajib diisi" });
   }
@@ -456,23 +531,61 @@ app.post("/api/incomes", (req, res) => {
     return res.status(400).json({ error: "income_day harus antara 1-31" });
   }
   const id = nanoid();
-  const rule = { id, source: source ?? "Gaji", amount, income_day };
-  db.prepare(`INSERT INTO income_rules (id, source, amount, income_day) VALUES (?, ?, ?, ?)`).run(
+  const rule = { id, source: source ?? "Gaji", amount, income_day, balance_account_id: balance_account_id ?? null };
+  db.prepare(`INSERT INTO income_rules (id, source, amount, income_day, balance_account_id) VALUES (?, ?, ?, ?, ?)`).run(
     id,
     rule.source,
     rule.amount,
-    rule.income_day
+    rule.income_day,
+    rule.balance_account_id
   );
 
   const history = generateIncomeHistory(rule);
   const insertIncome = db.prepare(
-    `INSERT INTO incomes (id, rule_id, source, amount, income_date) VALUES (?, ?, ?, ?, ?)`
+    `INSERT INTO incomes (id, rule_id, source, amount, income_date, balance_account_id) VALUES (?, ?, ?, ?, ?, ?)`
   );
   for (const row of history) {
-    insertIncome.run(row.id, row.rule_id, row.source, row.amount, row.income_date);
+    insertIncome.run(row.id, row.rule_id, row.source, row.amount, row.income_date, row.balance_account_id);
   }
 
   res.status(201).json(db.prepare("SELECT * FROM income_rules WHERE id = ?").get(id));
+});
+
+app.put("/api/incomes/:id", (req, res) => {
+  const existing = db.prepare("SELECT * FROM income_rules WHERE id = ?").get(req.params.id);
+  if (!existing) return res.status(404).json({ error: "Not found" });
+  const merged = { ...existing, ...req.body };
+
+  if (!merged.income_day || merged.income_day < 1 || merged.income_day > 31) {
+    return res.status(400).json({ error: "income_day harus antara 1-31" });
+  }
+
+  const rule = {
+    id: req.params.id,
+    source: merged.source ?? "Gaji",
+    amount: merged.amount,
+    income_day: merged.income_day,
+    balance_account_id: merged.balance_account_id ?? null,
+  };
+
+  db.prepare(`UPDATE income_rules SET source=?, amount=?, income_day=?, balance_account_id=? WHERE id=?`).run(
+    rule.source,
+    rule.amount,
+    rule.income_day,
+    rule.balance_account_id,
+    rule.id
+  );
+
+  db.prepare("DELETE FROM incomes WHERE rule_id = ?").run(rule.id);
+  const history = generateIncomeHistory(rule);
+  const insertIncome = db.prepare(
+    `INSERT INTO incomes (id, rule_id, source, amount, income_date, balance_account_id) VALUES (?, ?, ?, ?, ?, ?)`
+  );
+  for (const row of history) {
+    insertIncome.run(row.id, row.rule_id, row.source, row.amount, row.income_date, row.balance_account_id);
+  }
+
+  res.json(db.prepare("SELECT * FROM income_rules WHERE id = ?").get(rule.id));
 });
 
 app.get("/api/incomes/:id/history", (req, res) => {
@@ -585,14 +698,86 @@ function getPayPeriod(dateStr, payday) {
   };
 }
 
+// Kelompokkan events (sudah difilter per jenis) ke dalam hari lalu ke periode gajian.
+function groupEventsIntoPeriods(events, payday) {
+  const grouped = {};
+  for (const e of events) {
+    if (!grouped[e.date]) grouped[e.date] = { date: e.date, income: 0, expense: 0, items: [] };
+    if (e.type === "income") grouped[e.date].income += e.amount;
+    else grouped[e.date].expense += e.amount;
+    grouped[e.date].items.push(e);
+  }
+
+  const timeline = Object.values(grouped).sort((a, b) => (a.date < b.date ? -1 : 1));
+
+  const periodsMap = new Map();
+  for (const day of timeline) {
+    const period = getPayPeriod(day.date, payday);
+    if (!periodsMap.has(period.key)) {
+      periodsMap.set(period.key, { key: period.key, label: period.label, income: 0, expense: 0, days: [] });
+    }
+    const p = periodsMap.get(period.key);
+    p.income += day.income;
+    p.expense += day.expense;
+    p.days.push(day);
+  }
+  return [...periodsMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
+}
+
+function getPrimaryPayday() {
+  const primaryIncomeRule = db.prepare("SELECT * FROM income_rules ORDER BY income_day ASC LIMIT 1").get();
+  return primaryIncomeRule?.income_day ?? 1;
+}
+
+// Summary gaji & pengeluaran (tanpa hutang), lengkap dengan saldo berjalan per akun.
 app.get("/api/summary", (req, res) => {
   const today = formatDateLocal(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
 
-  const balanceSetting = db.prepare("SELECT * FROM settings WHERE key = 'atm_balance'").get();
-  const startingBalance = balanceSetting ? Number(balanceSetting.value) || 0 : 0;
+  const balanceAccounts = db.prepare("SELECT * FROM balance_accounts").all();
+  const startingBalance = balanceAccounts.reduce((s, a) => s + (a.balance || 0), 0);
+  const payday = getPrimaryPayday();
 
-  const primaryIncomeRule = db.prepare("SELECT * FROM income_rules ORDER BY income_day ASC LIMIT 1").get();
-  const payday = primaryIncomeRule?.income_day ?? 1;
+  const events = [];
+
+  const incomeRules = db.prepare("SELECT * FROM income_rules").all();
+  for (const rule of incomeRules) {
+    const incomeRows = db
+      .prepare("SELECT * FROM incomes WHERE rule_id = ? AND income_date >= ? ORDER BY income_date ASC")
+      .all(rule.id, today);
+    for (const row of incomeRows) {
+      events.push({
+        type: "income",
+        date: row.income_date,
+        platform: row.source,
+        amount: row.amount,
+        detail: "Pemasukan",
+        balance_account_id: row.balance_account_id ?? null,
+      });
+    }
+  }
+
+  const expenseRows = db
+    .prepare("SELECT * FROM expenses WHERE expense_date >= ? ORDER BY expense_date ASC")
+    .all(today);
+  for (const row of expenseRows) {
+    events.push({
+      type: "expense",
+      date: row.expense_date,
+      platform: row.category,
+      amount: row.amount,
+      detail: row.description ? `Pengeluaran — ${row.description}` : "Pengeluaran",
+      balance_account_id: row.balance_account_id ?? null,
+    });
+  }
+
+  const periods = groupEventsIntoPeriods(events, payday);
+  res.json({ startingBalance, payday, periods, balanceAccounts });
+});
+
+// Summary khusus hutang: jadwal cicilan & jatuh tempo, dikelompokkan per periode gajian.
+app.get("/api/summary/loan", (req, res) => {
+  const today = formatDateLocal(new Date().getFullYear(), new Date().getMonth(), new Date().getDate());
+  const payday = getPrimaryPayday();
 
   const activeDebts = db.prepare("SELECT * FROM debts WHERE status = 'active'").all();
   const events = [];
@@ -609,6 +794,8 @@ app.get("/api/summary", (req, res) => {
           platform: debt.platform,
           amount: inst.amount,
           detail: `Cicilan bulan ke-${inst.month_number}/${debt.tenor_months}`,
+          principal: debt.principal ?? null,
+          transaction_date: debt.transaction_date ?? null,
         });
       }
     } else if (debt.due_date >= today) {
@@ -618,54 +805,15 @@ app.get("/api/summary", (req, res) => {
         platform: debt.platform,
         amount: debt.min_payment ?? debt.outstanding,
         detail: "Jatuh tempo",
+        principal: debt.principal ?? null,
+        transaction_date: debt.transaction_date ?? null,
       });
     }
   }
 
-  const incomeRules = db.prepare("SELECT * FROM income_rules").all();
-  const maxDebtDate = events.reduce((max, e) => (e.date > max ? e.date : max), today);
-
-  for (const rule of incomeRules) {
-    const incomeRows = db
-      .prepare("SELECT * FROM incomes WHERE rule_id = ? AND income_date >= ? ORDER BY income_date ASC")
-      .all(rule.id, today);
-    for (const row of incomeRows) {
-      if (row.income_date > maxDebtDate && events.length > 0) break; // batasi sampai hutang terjauh selesai
-      events.push({
-        type: "income",
-        date: row.income_date,
-        platform: row.source,
-        amount: row.amount,
-        detail: "Pemasukan",
-      });
-    }
-  }
-
-  const grouped = {};
-  for (const e of events) {
-    if (!grouped[e.date]) grouped[e.date] = { date: e.date, income: 0, expense: 0, items: [] };
-    if (e.type === "income") grouped[e.date].income += e.amount;
-    else grouped[e.date].expense += e.amount;
-    grouped[e.date].items.push(e);
-  }
-
-  const timeline = Object.values(grouped).sort((a, b) => (a.date < b.date ? -1 : 1));
-
-  // Kelompokkan hari-hari di timeline ke dalam periode gajian (mis. "28 Sep - 27 Okt 2026").
-  const periodsMap = new Map();
-  for (const day of timeline) {
-    const period = getPayPeriod(day.date, payday);
-    if (!periodsMap.has(period.key)) {
-      periodsMap.set(period.key, { key: period.key, label: period.label, income: 0, expense: 0, days: [] });
-    }
-    const p = periodsMap.get(period.key);
-    p.income += day.income;
-    p.expense += day.expense;
-    p.days.push(day);
-  }
-  const periods = [...periodsMap.values()].sort((a, b) => (a.key < b.key ? -1 : 1));
-
-  res.json({ startingBalance, payday, periods });
+  const periods = groupEventsIntoPeriods(events, payday);
+  const totalOutstanding = activeDebts.reduce((s, d) => s + (d.outstanding || 0), 0);
+  res.json({ payday, periods, totalOutstanding, totalActiveDebts: activeDebts.length });
 });
 
 const PORT = process.env.PORT || 4000;

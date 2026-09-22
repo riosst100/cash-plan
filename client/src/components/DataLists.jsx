@@ -1,9 +1,45 @@
 import { useState, Fragment } from "react";
+import { Pencil, Trash2, CheckCircle2, RotateCcw, ListTree, History } from "lucide-react";
 import { formatRupiah as fmt } from "../format.js";
 import { formatDate, formatDayOnly } from "../dateFormat.js";
 import InstallmentSubRow from "./InstallmentSubRow.jsx";
 
 const PERIOD_LABEL = { monthly: "bln", yearly: "thn", daily: "hari" };
+
+export function BalanceList({ balances, onEdit, onDelete }) {
+  if (balances.length === 0) return <p className="empty">Belum ada akun saldo. Tambahkan (mis. ATM, Gopay, Cash) untuk mulai tracking.</p>;
+  const total = balances.reduce((s, b) => s + (b.balance || 0), 0);
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>Nama Akun</th>
+            <th>Saldo</th>
+            <th></th>
+          </tr>
+        </thead>
+        <tbody>
+          {balances.map((b) => (
+            <tr key={b.id}>
+              <td>{b.name}</td>
+              <td>{fmt(b.balance)}</td>
+              <td className="row-actions">
+                <button className="btn-edit-sm" onClick={() => onEdit(b)}><Pencil size={13} /> Edit</button>
+                <button className="btn-danger-sm" onClick={() => onDelete(b.id)}><Trash2 size={13} /> Hapus</button>
+              </td>
+            </tr>
+          ))}
+          <tr>
+            <td><strong>Total</strong></td>
+            <td><strong>{fmt(total)}</strong></td>
+            <td></td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  );
+}
 
 // Plafon diambil langsung dari kolom `principal` yang tersimpan (bukan dihitung balik dari
 // outstanding) supaya selalu konsisten dengan angka yang diinput user. Untuk data lama yang
@@ -59,8 +95,8 @@ export function PlatformList({ platforms, onDelete, onEdit }) {
                     : "Ikut tgl pengajuan"}
                 </td>
                 <td className="row-actions">
-                  <button className="btn-secondary-sm" onClick={() => onEdit(p)}>Edit</button>
-                  <button className="btn-danger-sm" onClick={() => onDelete(p.id)}>Hapus</button>
+                  <button className="btn-edit-sm" onClick={() => onEdit(p)}><Pencil size={13} /> Edit</button>
+                  <button className="btn-danger-sm" onClick={() => onDelete(p.id)}><Trash2 size={13} /> Hapus</button>
                 </td>
               </tr>
             );
@@ -126,16 +162,16 @@ export function DebtList({ debts, platforms, onDelete, onEdit, onMarkPaid, onMar
                   <td>{isPaid ? <span className="text-good">Lunas</span> : "Aktif"}</td>
                   <td className="row-actions">
                     {hasSchedule ? (
-                      <button className="btn-secondary-sm" onClick={() => setExpandedId(isExpanded ? null : d.id)}>
-                        {isExpanded ? "Tutup Cicilan" : "Detail Cicilan"}
+                      <button className="btn-info-sm" onClick={() => setExpandedId(isExpanded ? null : d.id)}>
+                        <ListTree size={13} /> {isExpanded ? "Tutup Cicilan" : "Detail Cicilan"}
                       </button>
                     ) : isPaid ? (
-                      <button className="btn-secondary-sm" onClick={() => onMarkActive(d.id)}>Aktifkan Lagi</button>
+                      <button className="btn-info-sm" onClick={() => onMarkActive(d.id)}><RotateCcw size={13} /> Aktifkan Lagi</button>
                     ) : (
-                      <button className="btn-secondary-sm" onClick={() => onMarkPaid(d.id)}>Tandai Lunas</button>
+                      <button className="btn-success-sm" onClick={() => onMarkPaid(d.id)}><CheckCircle2 size={13} /> Tandai Lunas</button>
                     )}
-                    <button className="btn-secondary-sm" onClick={() => onEdit(d)}>Edit</button>
-                    <button className="btn-danger-sm" onClick={() => onDelete(d.id)}>Hapus</button>
+                    <button className="btn-edit-sm" onClick={() => onEdit(d)}><Pencil size={13} /> Edit</button>
+                    <button className="btn-danger-sm" onClick={() => onDelete(d.id)}><Trash2 size={13} /> Hapus</button>
                   </td>
                 </tr>
                 {hasSchedule && isExpanded && (
@@ -156,8 +192,9 @@ const RECURRENCE_LABEL = {
   once: (e) => formatDate(e.expense_date),
 };
 
-export function ExpenseList({ expenses, onDelete, onViewHistory }) {
+export function ExpenseList({ expenses, balances = [], onDelete, onEdit, onViewHistory }) {
   if (expenses.length === 0) return <p className="empty">Belum ada data pengeluaran.</p>;
+  const accountName = (id) => balances.find((b) => b.id === id)?.name ?? "-";
   return (
     <div className="table-wrap">
       <table>
@@ -167,6 +204,7 @@ export function ExpenseList({ expenses, onDelete, onViewHistory }) {
             <th>Deskripsi</th>
             <th>Jumlah</th>
             <th>Jadwal</th>
+            <th>Sumber Saldo</th>
             <th></th>
           </tr>
         </thead>
@@ -177,11 +215,13 @@ export function ExpenseList({ expenses, onDelete, onViewHistory }) {
               <td>{e.description || "-"}</td>
               <td>{fmt(e.amount)}</td>
               <td>{RECURRENCE_LABEL[e.recurrence]?.(e) ?? "-"}</td>
+              <td>{accountName(e.balance_account_id)}</td>
               <td className="row-actions">
                 {e.recurrence !== "once" && (
-                  <button className="btn-secondary-sm" onClick={() => onViewHistory(e.id)}>Lihat History</button>
+                  <button className="btn-info-sm" onClick={() => onViewHistory(e.id)}><History size={13} /> Lihat History</button>
                 )}
-                <button className="btn-danger-sm" onClick={() => onDelete(e.id)}>Hapus</button>
+                <button className="btn-edit-sm" onClick={() => onEdit(e)}><Pencil size={13} /> Edit</button>
+                <button className="btn-danger-sm" onClick={() => onDelete(e.id)}><Trash2 size={13} /> Hapus</button>
               </td>
             </tr>
           ))}
@@ -191,8 +231,9 @@ export function ExpenseList({ expenses, onDelete, onViewHistory }) {
   );
 }
 
-export function IncomeList({ incomes, onDelete, onViewHistory }) {
+export function IncomeList({ incomes, balances = [], onDelete, onEdit, onViewHistory }) {
   if (incomes.length === 0) return <p className="empty">Belum ada data pemasukan.</p>;
+  const accountName = (id) => balances.find((b) => b.id === id)?.name ?? "-";
   return (
     <div className="table-wrap">
       <table>
@@ -201,6 +242,7 @@ export function IncomeList({ incomes, onDelete, onViewHistory }) {
             <th>Sumber</th>
             <th>Jumlah</th>
             <th>Tanggal Gajian</th>
+            <th>Tujuan Saldo</th>
             <th></th>
           </tr>
         </thead>
@@ -210,9 +252,11 @@ export function IncomeList({ incomes, onDelete, onViewHistory }) {
               <td>{i.source}</td>
               <td>{fmt(i.amount)}</td>
               <td>Tgl {i.income_day} (tiap bulan)</td>
+              <td>{accountName(i.balance_account_id)}</td>
               <td className="row-actions">
-                <button className="btn-secondary-sm" onClick={() => onViewHistory(i.id)}>Lihat History</button>
-                <button className="btn-danger-sm" onClick={() => onDelete(i.id)}>Hapus</button>
+                <button className="btn-info-sm" onClick={() => onViewHistory(i.id)}><History size={13} /> Lihat History</button>
+                <button className="btn-edit-sm" onClick={() => onEdit(i)}><Pencil size={13} /> Edit</button>
+                <button className="btn-danger-sm" onClick={() => onDelete(i.id)}><Trash2 size={13} /> Hapus</button>
               </td>
             </tr>
           ))}

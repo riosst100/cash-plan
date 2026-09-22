@@ -27,20 +27,30 @@ export const api = {
   getDebtInstallments: (id) => request(`/debts/${id}/installments`),
   updateInstallmentStatus: (debtId, installmentId, status) =>
     request(`/debts/${debtId}/installments/${installmentId}`, { method: "PATCH", body: JSON.stringify({ status }) }),
+  updateInstallmentAmount: (debtId, installmentId, amount) =>
+    request(`/debts/${debtId}/installments/${installmentId}`, { method: "PATCH", body: JSON.stringify({ amount }) }),
 
   getExpenses: () => request("/expenses"),
   addExpense: (data) => request("/expenses", { method: "POST", body: JSON.stringify(data) }),
+  updateExpense: (id, data) => request(`/expenses/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteExpense: (id) => request(`/expenses/${id}`, { method: "DELETE" }),
   getExpenseHistory: (id) => request(`/expenses/${id}/history`),
 
   getIncomes: () => request("/incomes"),
   addIncome: (data) => request("/incomes", { method: "POST", body: JSON.stringify(data) }),
+  updateIncome: (id, data) => request(`/incomes/${id}`, { method: "PUT", body: JSON.stringify(data) }),
   deleteIncome: (id) => request(`/incomes/${id}`, { method: "DELETE" }),
   getIncomeHistory: (id) => request(`/incomes/${id}/history`),
 
   analyze: () => request("/analyze", { method: "POST" }),
   getSummary: () => request("/summary"),
+  getSummaryLoan: () => request("/summary/loan"),
 
   getSetting: (key) => request(`/settings/${key}`),
   setSetting: (key, value) => request(`/settings/${key}`, { method: "PUT", body: JSON.stringify({ value }) }),
+
+  getBalances: () => request("/balances"),
+  addBalance: (data) => request("/balances", { method: "POST", body: JSON.stringify(data) }),
+  updateBalance: (id, data) => request(`/balances/${id}`, { method: "PUT", body: JSON.stringify(data) }),
+  deleteBalance: (id) => request(`/balances/${id}`, { method: "DELETE" }),
 };
